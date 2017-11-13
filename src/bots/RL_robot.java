@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+import static robocode.util.Utils.normalRelativeAngle;
 import static robocode.util.Utils.normalRelativeAngleDegrees;
 
 public class RL_robot extends AdvancedRobot{
@@ -23,21 +24,29 @@ public class RL_robot extends AdvancedRobot{
 
     /*
      state-action space
-     States: deltaX, deltaY from enemy; deltaX, deltaY from center, enemy low/ok (-1/+1)
-     Actions: move up/down/left/right; fire
+     7 States: enemy velocity, enemy heading, enemy fired; distance from enemy, deltaX/Y from center, our robot heading;
+     Quantization:
+        velocity: 0 - stationary; 1 - moving
+        enemy heading: quantized into 4 quadrants (0 - x<90, 1 - 90<=x<180, 2 - 180<=x<270, 3 - 270<=x)
+        enemy fired: 0 - no; 1 - yes
+        distance from enemy: 0~9
+        delta X,Y from center: -4~4
+        robot heading: quantized into 4 quadrants (0 - x<90, 1 - 90<=x<180, 2 - 180<=x<270, 3 - 270<=x)
+     6 Actions: move up/down/left/right; fire (linear/circular)
       */
 
     private static double[][] stateActionTable = {
-            {0, 0, 0, 0, 0, 0},             // pre-populated for action moveUp
-            {0, 0, 0, 0, 0, 1},             // pre-populated for action moveDown
-            {0, 0, 0, 0, 0, 2},             // pre-populated for action moveLeft
-            {0, 0, 0, 0, 0, 3},             // pre-populated for action moveRight
-            {0, 0, 0, 0, 0, 4}             // pre-populated for action fire
+            {0, 0, 0, 0, 0, 0, 0, 0},             // pre-populated for action moveUp
+            {0, 0, 0, 0, 0, 0, 0, 1},             // pre-populated for action moveDown
+            {0, 0, 0, 0, 0, 0, 0, 2},             // pre-populated for action moveLeft
+            {0, 0, 0, 0, 0, 0, 0, 3},             // pre-populated for action moveRight
+            {0, 0, 0, 0, 0, 0, 0, 4},             // pre-populated for action fire (linear prediction)
+//            {0, 0, 0, 0, 0, 0, 0, 5}              // pre-populated for action fire (circular prediction)
     };
 
     // Constants for LUT State actions
-    private static final int NUM_STATES = 5;
-    private static final int NUM_ACTIONS = 1;
+    private static final int NUM_STATES = 7;
+    private static final int NUM_ACTIONS = 5;
 
 
     // Discount factor and learning rate
@@ -51,9 +60,9 @@ public class RL_robot extends AdvancedRobot{
 
     // Rewards weights
     private static final double badInstantReward = -0.25;
-    private static final double badTerminalReward = -0.5;
-    private static final double goodInstantReward = 0.025;
-    private static final double goodTerminalReward = 0.75;
+    private static final double badTerminalReward = -1;
+    private static final double goodInstantReward = 0.25;
+    private static final double goodTerminalReward = 1;
 
     // Control exploring and learning
     private static boolean learning = true;
@@ -65,7 +74,7 @@ public class RL_robot extends AdvancedRobot{
     /*
     Statistics of learning
      */
-    private final int AVERAGE_SAMPLE_SIZE = 1000; // number of rounds which average is calculated
+    private final int AVERAGE_SAMPLE_SIZE = 100; // number of rounds which average is calculated
     private static int sampleCount = 0;
     private static int numWins = 0;
 
@@ -81,6 +90,11 @@ public class RL_robot extends AdvancedRobot{
     private static int numWallHit = 0;
     private static int numBulletHit = 0;
     private static int numHitByBullet = 0;
+    private static int numBulletDodge = 0;
+    private static boolean isHitByBullet = false;
+    private static double hitBulletPower = 0.0;
+    private static boolean isBulletHit = false;
+    private static boolean  removeDodgeCallback = false;
 
     private static double totalNNSquaredError = 0;
     private static int winForAutosaving = 100; // automatically save the weights after number of wins
@@ -97,20 +111,23 @@ public class RL_robot extends AdvancedRobot{
     ===============================    Robot control related variables    =============================
      */
 
-    // Threshold for low energy
-    private static final double lowEnergy = 40;
+    // Enemy energy which is used to detect when the enemy has fired
+    private static double currentEnemyEnergy;
+    private static double previousEnemyEnergy = 100;
 
-//    // if we have locked on target
-//    private static boolean enemyLockedOn = false;
+    // Last scan time
+    private static long lastScanTime = 0;
+    private static final long MAX_IDLE_TIME = 2;
 
-    // Gun power used: 1,2,3
-    private static final int gunPower = 1;
+    // Gun power used: 0.1 - 3
+    private static final double gunPower = 1.9;
 
     // Distance moved each step
-    private static final int stepDistance = 50;
+    private static final int stepDistance = 100;
+    private static final int wallBuffer = 150;
 
     // x,y scaling factor (for quantization); for example, if scalingFactor = 0.01: x_states = 800 * 0.01 = 8;
-    private static final double scalingFactor = 0.02;
+    private static final double scalingFactor = 0.01;
     // constants for arena dimension
     private static final double arenaWidth = 800;
     private static final double arenaHeight = 600;
@@ -120,24 +137,28 @@ public class RL_robot extends AdvancedRobot{
     private RobotActions selectedAction;
 
     // initialize current and previous state action
-    private static double[] currentStateAction = new double[]{0, 0, 0, 0, 0, 0};
-    private static double[] previousStateAction = new double[]{0, 0, 0, 0, 0, 0};
+    private static double[] currentStateAction = new double[]{0, 0, 0, 0, 0, 0, 0, 0};
+    private static double[] previousStateAction = new double[]{0, 0, 0, 0, 0, 0, 0, 0};
 
 
     // Enum of the state machine of the Robot, it first scan to get a sense of the current state s',
     // then select an action to maximize Q(s',a'), then it performs the action,
     // wait for the reward event when it updates the previous Q(s,a) and store s <- s', go back to scan mode
-    private enum RobotMode {SCAN, IDLE}
+    private enum RobotMode {SCAN, SELECT, PERFORM, IDLE}
     private RobotMode mode;
 
 
-    // store the enemy tank status
-//    private double bearing = 0.0;
-//    private double distance = 0.0;
-//    private double energy = 0.0;
-//    private double heading = 0.0;
-//    private double speed = 0.0;
-//    private boolean isEnemyStatusUpToDate = false;
+    // store the enemy tank and our own tank status
+    private static double ourRobotPositionX = 0.0;
+    private static double ourRobotPositionY = 0.0;
+    private static double currentEnemyPositionX = 0.0;
+    private static double currentEnemyPositionY = 0.0;
+    private static double currentEnemyHeading = 0.0;
+    private static double currentEnemyVelocity = 0.0;
+    private static double currentEnemyDistance = 0.0;
+    private static double currentenemyBearingRadians = 0.0;
+    private static double currentEnemyHeadingRadians = 0.0;
+    private static boolean enemyFired = false;
 
     private boolean closeToTopWall = false, closeToLeftWall = false, closeToRightWall = false, closeToBottomWall = false;
 
@@ -162,7 +183,9 @@ public class RL_robot extends AdvancedRobot{
             4   // upper bound for actions
     };
 
-    private LUT myLUT = new LUT(NUM_STATES+NUM_ACTIONS, floors, ceilings);
+    private LUT myLUT = new LUT(NUM_STATES+1, floors, ceilings);
+
+    private Intercept intercept = new Intercept();
 
 
     // the Robocode main method
@@ -197,7 +220,33 @@ public class RL_robot extends AdvancedRobot{
         // Here we use Turn Multiplier Lock to ensure a lock on the enemy
         turnRadarRightRadians(Double.POSITIVE_INFINITY);
         do {
-            scan();
+//            switch (mode){
+//                case SCAN:
+//                    turnRadarRight(45);
+//                    break;
+//
+//                case SELECT:
+//                    updateStateAction();
+//                    mode = RobotMode.PERFORM;
+//                    break;
+//
+//                case PERFORM:
+//                    performAction();
+//                    mode = RobotMode.SCAN;
+//                    break;
+//
+//                case IDLE:
+//                    // here we wait a bit for the rewards event to happen
+//                    turnRadarRight(45);     // we still scan the enemy to make sure our radar still locks on the enemy
+//                    break;
+//            }
+
+            // infinite lock
+            if (getRadarTurnRemaining() == 0.0){
+                setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+            }
+            execute();
+
         } while (true);
     }
 
@@ -243,35 +292,24 @@ public class RL_robot extends AdvancedRobot{
             if (rand.nextDouble() < epsilon) {
                 int i = rand.nextInt(NUM_ACTIONS);  //generates a random number between 0 and NUM_ACTIONS-1
                 currentQ = myLUT.outputFor(stateActionTable[i]);
-                for(int j=0; j< NUM_STATES+NUM_ACTIONS; j++) {
-                    currentStateAction[j] = stateActionTable[i][j];
-                }
+                System.arraycopy(stateActionTable[i], 0, currentStateAction, 0, NUM_STATES + 1);
                 selectedAction = RobotActions.values()[i];
             }
         } else { // go with the best Q
             currentQ = maxQ;
-            for(int i=0; i< NUM_STATES+NUM_ACTIONS; i++) {
-                currentStateAction[i] = stateActionTable[selectedAction.ordinal()][i];
-            }
+            System.arraycopy(stateActionTable[selectedAction.ordinal()], 0, currentStateAction, 0, NUM_STATES + 1);
         }
 
         // add up the total Q
         averageSumQ += currentQ;
     }
 
-    private void performAction(ScannedRobotEvent enemyRobot){
+    private void performAction(){
         double currentHeading = getHeading();
 
-        // detect enemy energy states (if enemy has 0 energy, kill it)
-        double enemyEnergy = enemyRobot.getEnergy();
-
-        // variable control how we want to turn the gun
-        double gunTurnAmount = normalRelativeAngleDegrees(enemyRobot.getBearing() + getHeading() - getGunHeading());
-
-        // when the enemy has no energy left, we kill it by rapid fire
-        while(enemyEnergy == 0){
-            turnGunRight(gunTurnAmount);
-            fire(3);
+        // when the enemy has no energy left, we fire at it.
+        if(currentEnemyEnergy == 0){
+            setFire(gunPower);
         }
 
         // perform the selected action
@@ -313,29 +351,106 @@ public class RL_robot extends AdvancedRobot{
                 break;
 
             case FIRE:  // aim at the energy and fire
-                setTurnGunRight(gunTurnAmount);
-                setFire(gunPower);
+                aimFire();
                 break;
 
         }
         execute();
     }
 
-    private void updateStateActionTable(ScannedRobotEvent enemyRobot) {
-        // read enemy & own robot status for states
-        double deltaX = Math.sin(enemyRobot.getBearingRadians() + getHeadingRadians()) * enemyRobot.getDistance() * scalingFactor;
-        double deltaY = Math.cos(enemyRobot.getBearingRadians() + getHeadingRadians()) * enemyRobot.getDistance() * scalingFactor;
-        double xFromCenter = (getX() - arenaWidth/2.0) * scalingFactor;
-        double yFromCenter = (getY() - arenaHeight/2.0) * scalingFactor;
-        double ownEnergy = (this.getEnergy() >= lowEnergy)? +1 : -1; // boolean states: own energy is -1 if less than low energy threshold
+    private void aimFire() {
+        final double FIREPOWER = 2;
+        final double ROBOT_WIDTH = 16,ROBOT_HEIGHT = 16;
+        // Variables prefixed with e- refer to enemy, b- refer to bullet and r- refer to robot
+        final double eAbsBearing = getHeadingRadians() + currentenemyBearingRadians;
+        final double rX = getX(), rY = getY(),
+                bV = Rules.getBulletSpeed(FIREPOWER);
+        final double eX = rX + currentEnemyDistance*Math.sin(eAbsBearing),
+                eY = rY + currentEnemyDistance*Math.cos(eAbsBearing),
+                eV = currentEnemyVelocity,
+                eHd = currentEnemyHeadingRadians;
+        // These constants make calculating the quadratic coefficients below easier
+        final double A = (eX - rX)/bV;
+        final double B = eV/bV*Math.sin(eHd);
+        final double C = (eY - rY)/bV;
+        final double D = eV/bV*Math.cos(eHd);
+        // Quadratic coefficients: a*(1/t)^2 + b*(1/t) + c = 0
+        final double a = A*A + C*C;
+        final double b = 2*(A*B + C*D);
+        final double c = (B*B + D*D - 1);
+        final double discrim = b*b - 4*a*c;
+        if (discrim >= 0) {
+            // Reciprocal of quadratic formula
+            final double t1 = 2 * a / (-b - Math.sqrt(discrim));
+            final double t2 = 2 * a / (-b + Math.sqrt(discrim));
+            final double t = Math.min(t1, t2) >= 0 ? Math.min(t1, t2) : Math.max(t1, t2);
+            // Assume enemy stops at walls
+            final double endX = limit(
+                    eX + eV * t * Math.sin(eHd),
+                    ROBOT_WIDTH / 2, getBattleFieldWidth() - ROBOT_WIDTH / 2);
+            final double endY = limit(
+                    eY + eV * t * Math.cos(eHd),
+                    ROBOT_HEIGHT / 2, getBattleFieldHeight() - ROBOT_HEIGHT / 2);
+            setTurnGunRightRadians(robocode.util.Utils.normalRelativeAngle(
+                    Math.atan2(endX - rX, endY - rY)
+                            - getGunHeadingRadians()));
+            setFire(FIREPOWER);
+        }
+    }
+
+    private double limit(double value, double min, double max) {
+        return Math.min(max, Math.max(min, value));
+    }
+
+    // we do predictive fire
+    private void predictiveFire() {
+        intercept.calculate(ourRobotPositionX, ourRobotPositionY, currentEnemyPositionX, currentEnemyPositionY, currentEnemyHeading,
+                currentEnemyVelocity, gunPower, 0);
+        double turnAngle = normalRelativeAngle(intercept.bulletHeading_deg - getGunHeading());
+        turnGunRight(turnAngle);
+
+        if (Math.abs(turnAngle) <= intercept.angleThreshold) {
+            // Ensure that the gun is pointing at the correct angle
+            if ((intercept.impactPoint.x > 0) && (intercept.impactPoint.x < getBattleFieldWidth()) &&
+                    (intercept.impactPoint.y > 0) && (intercept.impactPoint.y < getBattleFieldHeight())) {
+                // Ensure that the predicted impact point is within
+                // the battlefield
+                fire(gunPower);
+            }
+        }
+    }
+
+    private void updateStateActionTable(double enemyDistance) {
+        // quantization
+        double enemyVelocityQuantized = (currentEnemyVelocity != 0) ? 1 : 0;
+        double enemyHeadingQuantized = degreeQuantization(currentEnemyHeading);
+        double enemyFiredDouble = (enemyFired) ? 1 : 0;
+        double enemyDistanceQuantized = (double)Math.round(enemyDistance * scalingFactor);
+        double xFromCenterQuantized = (double)Math.round((getX() - arenaWidth/2.0) * scalingFactor);
+        double yFromCenterQuantized = (double)Math.round((getY() - arenaHeight/2.0) * scalingFactor);
+        double headingQuantized = degreeQuantization(getHeading());
 
         // update the state action table
         for(RobotActions i: RobotActions.values()){
-            stateActionTable[i.ordinal()][0] = (double)Math.round(deltaX);
-            stateActionTable[i.ordinal()][1] = (double)Math.round(deltaY);
-            stateActionTable[i.ordinal()][2] = (double)Math.round(xFromCenter);
-            stateActionTable[i.ordinal()][3] = (double)Math.round(yFromCenter);
-            stateActionTable[i.ordinal()][4] = ownEnergy;
+            stateActionTable[i.ordinal()][0] = enemyVelocityQuantized;
+            stateActionTable[i.ordinal()][1] = enemyHeadingQuantized;
+            stateActionTable[i.ordinal()][2] = enemyFiredDouble;
+            stateActionTable[i.ordinal()][3] = enemyDistanceQuantized;
+            stateActionTable[i.ordinal()][4] = xFromCenterQuantized;
+            stateActionTable[i.ordinal()][5] = yFromCenterQuantized;
+            stateActionTable[i.ordinal()][6] = headingQuantized;
+        }
+    }
+
+    private double degreeQuantization(double currentEnemyHeading) {
+        if(currentEnemyHeading < 90){
+            return 0;
+        } else if (90 <= currentEnemyHeading && currentEnemyHeading < 180){
+            return 1;
+        } else if (180 <= currentEnemyHeading && currentEnemyHeading < 270){
+            return 2;
+        } else {
+            return 3;
         }
     }
 
@@ -366,25 +481,39 @@ public class RL_robot extends AdvancedRobot{
         closeToLeftWall = false;
         closeToRightWall = false;
 
-        if(x<100){
+        if(x<wallBuffer){
             closeToLeftWall = true;
-        } else if (x>700){
+        } else if (x>(arenaWidth - wallBuffer)){
             closeToRightWall = true;
         }
 
-        if(y<100){
+        if(y<wallBuffer){
             closeToBottomWall = true;
-        } else if (y>500){
+        } else if (y>(arenaHeight - wallBuffer)){
             closeToTopWall = true;
         }
     }
 
     private void move(boolean closeToWall) {
         if(closeToWall){
-            setBack(stepDistance);
+            // TODO add wall avoidance
+            setAhead(stepDistance);
         } else {
             setAhead(stepDistance);
         }
+    }
+
+    private void updateAllStats(ScannedRobotEvent enemyRobot) {
+        ourRobotPositionX = getX();
+        ourRobotPositionY = getY();
+        currentEnemyDistance = enemyRobot.getDistance();
+        currentenemyBearingRadians = enemyRobot.getBearingRadians();
+        currentEnemyPositionX = ourRobotPositionX + Math.sin(enemyRobot.getBearingRadians() + getHeadingRadians()) * currentEnemyDistance;
+        currentEnemyPositionY = ourRobotPositionY + Math.cos(enemyRobot.getBearingRadians() + getHeadingRadians()) * currentEnemyDistance;
+        currentEnemyHeading = enemyRobot.getHeading();
+        currentEnemyHeadingRadians = enemyRobot.getHeadingRadians();
+        currentEnemyVelocity = enemyRobot.getVelocity();
+        currentEnemyEnergy = enemyRobot.getEnergy();
     }
 
     /*
@@ -394,25 +523,74 @@ public class RL_robot extends AdvancedRobot{
     // This is the main callback where we update the states, select action and then perform action
     @Override
     public void onScannedRobot(ScannedRobotEvent enemyRobot) {
-
         // Turn Multiplier Lock
-        double radarTurn = getHeadingRadians() + enemyRobot.getBearingRadians() - getRadarHeadingRadians();
-        turnRadarRightRadians(2.0 * Utils.normalRelativeAngle(radarTurn));
+        double radarTurn = Utils.normalRelativeAngle(getHeadingRadians() + enemyRobot.getBearingRadians() - getRadarHeadingRadians());
+        double extraTurn = Math.min(Math.atan(36.0/enemyRobot.getDistance()), Rules.RADAR_TURN_RATE_RADIANS);
+        if(radarTurn < 0) radarTurn -= extraTurn;
+        else radarTurn += extraTurn;
+        setTurnRadarRightRadians(radarTurn);
 
+        // update the stats of enemy robot and our robot
+        updateAllStats(enemyRobot);
+        double enemyDistance = enemyRobot.getDistance();
+
+        // Check if the enemy has fired
+        enemyFired = false;     // reset enemy fired
+
+        // enemy energy drop
+        double deltaEnemyEnergy = previousEnemyEnergy - currentEnemyEnergy;
+        // we offset this energy drop when our bullet hits the enemy or we are hit by enemy bullet or the enemy runs into wall (ignored)
+        if(isHitByBullet) {
+            deltaEnemyEnergy += hitBulletPower;
+            isHitByBullet = false;
+        }
+        if(isBulletHit) {
+//            deltaEnemyEnergy -= (double)Math.round(Rules.getBulletDamage(gunPower));
+            deltaEnemyEnergy -= 10.0;
+            isBulletHit = false;
+        }
+        final double enemyGunpower = deltaEnemyEnergy;
+
+
+        // we add a custom event listen to the event when we have dodged this bullet
+        Condition dodgeBulletCallback = new Condition("dodgeBulletCallback") {
+            @Override
+            public boolean test() {
+                double bulletSpeed = 20 - 3 * enemyGunpower;
+                double bulletBearing = currentenemyBearingRadians;
+                return ((bulletSpeed * (getTime() - enemyRobot.getTime()) > (enemyDistance+32 - getVelocity()*Math.sin(bulletBearing))) && !isHitByBullet && !removeDodgeCallback);
+            }
+        };
+        if(deltaEnemyEnergy>1.9 && deltaEnemyEnergy<=3){ // when the enemy has fired a bullet
+            mode = RobotMode.SCAN;
+            enemyFired = true;
+            isHitByBullet = false;
+            addCustomEvent(dodgeBulletCallback);
+            removeDodgeCallback = false;
+        }
+        if (removeDodgeCallback){   // when the flag to remove callback is set by event handler
+            removeCustomEvent(dodgeBulletCallback);
+        }
+
+        previousEnemyEnergy = currentEnemyEnergy;
         // We only update the states and take actions when we are in scanning mode
         if(mode == RobotMode.SCAN) {
-            // update the current state action table
-            updateStateActionTable(enemyRobot);
+            // update scan time
+            lastScanTime = enemyRobot.getTime();
 
-            // select action based on Q(s,a)
+            // update the current state action table
+            updateStateActionTable(enemyDistance);
+
+            // change the mode to SELECT action
+            mode = RobotMode.SELECT;
             updateStateAction();
 
-            // perform actions
-            performAction(enemyRobot);
+            // change the mode to perform actions
+            mode = RobotMode.PERFORM;
+            performAction();
 
-            // change the mode to IDLE and wait for rewards to evaluate our next action
             mode = RobotMode.IDLE;
-        }
+        } else if (getTime() > lastScanTime + MAX_IDLE_TIME) mode = RobotMode.SCAN;
     }
 
     /*
@@ -420,7 +598,9 @@ public class RL_robot extends AdvancedRobot{
      */
     @Override
     public void onHitByBullet(HitByBulletEvent event) {
-        backStep(badInstantReward);
+        isHitByBullet = true;
+        backStep(-Rules.getBulletDamage(event.getPower()));
+        hitBulletPower = Rules.getBulletHitBonus(event.getPower());
         numHitByBullet++;
     }
 
@@ -429,10 +609,15 @@ public class RL_robot extends AdvancedRobot{
      */
     @Override
     public void onHitWall(HitWallEvent event) {
-        backStep(badInstantReward);
+        backStep(-Math.abs(getVelocity()*0.5 - 1));
         numWallHit++;
         // we step back from the wall
-        back(stepDistance+50);
+        double bearing = event.getBearing();
+        if (bearing < 90 && bearing > -90){
+            back(stepDistance);
+        }else {
+            ahead(stepDistance);
+        }
     }
 
     /*
@@ -441,7 +626,7 @@ public class RL_robot extends AdvancedRobot{
 
     @Override
     public void onHitRobot(HitRobotEvent event) {
-        backStep(badInstantReward);
+        backStep(-0.6);
     }
 
     /*
@@ -449,16 +634,32 @@ public class RL_robot extends AdvancedRobot{
              */
     @Override
     public void onDeath(DeathEvent event) {
-        backStep(badTerminalReward);
+        backStep(-100);
+    }
+
+    @Override
+    public void onBulletMissed(BulletMissedEvent event) {
+        backStep(-gunPower);
     }
 
     /*
-        when our fired bullet hit the enemy
+        when we dodged a bullet
          */
     @Override
+    public void onCustomEvent(CustomEvent event) {
+        removeDodgeCallback = true;
+//        backStep(3);
+//        numBulletDodge++;
+    }
+
+    /*
+            when our fired bullet hit the enemy
+             */
+    @Override
     public void onBulletHit(BulletHitEvent event) {
-        backStep(goodInstantReward);
+        backStep(16);
         numBulletHit++;
+        isBulletHit = true;
     }
 
     /*
@@ -466,25 +667,22 @@ public class RL_robot extends AdvancedRobot{
          */
     @Override
     public void onRobotDeath(RobotDeathEvent event) {
-        backStep(goodTerminalReward);
+        backStep(100);
     }
 
     private void backStep(double reward) {
         // we only perform back-step in IDLE mode, otherwise we do nothing (we expect this probability to be minimum)
-        if(mode == RobotMode.IDLE) {
-            numBackSteps++;
+        numBackSteps++;
 
-            // update Q value
-            previousQ = myLUT.outputFor(previousStateAction);
-            errorQ = ALPHA * (reward + GAMMA * currentQ - previousQ);
-            if (learning) myLUT.train(previousStateAction, previousQ + errorQ);
+        // update Q value
+        previousQ = myLUT.outputFor(previousStateAction);
+        errorQ = ALPHA * (reward + GAMMA * currentQ - previousQ);
+        if (learning) myLUT.train(previousStateAction, previousQ + errorQ);
 
-            averageErrorQ += errorQ;
-            // set the current state action pair as the previous one
-            for(int i=0; i< NUM_STATES+NUM_ACTIONS; i++) {
-                previousStateAction[i] = currentStateAction[i];
-            }
-        } else System.out.println("Oops! An event happened during SCAN mode");
+        averageErrorQ += errorQ;
+        // set the current state action pair as the previous one
+        System.arraycopy(currentStateAction, 0, previousStateAction, 0, NUM_STATES + 1);
+
         //change the state machine to SCAN mode again
         mode = RobotMode.SCAN;
     }
@@ -499,19 +697,16 @@ public class RL_robot extends AdvancedRobot{
         /*
          auto-save for each 1000 samples
           */
-//        if((sampleCount%AVERAGE_SAMPLE_SIZE == 0) && sampleCount!=0) {
+        if((sampleCount%AVERAGE_SAMPLE_SIZE == 0) && sampleCount!=0) {
 //            try {
 //                saveStats();    // save the statistics
 //            } catch(IOException e){}
-//        }
+            numWins = 0;
+        }
 
         // calculate average error Q
         averageErrorQ = averageErrorQ/numBackSteps;
         averageSumQ = averageSumQ/numBackSteps;
-
-        try {
-            saveStats();    // save the statistics
-        } catch(IOException e){}
 
         // reset number of back step and averageErrorQ
         numBackSteps = 0;
@@ -522,6 +717,7 @@ public class RL_robot extends AdvancedRobot{
         numWallHit = 0;
         numBulletHit = 0;
         numHitByBullet = 0;
+        numBulletDodge = 0;
 
     }
 
@@ -532,9 +728,9 @@ public class RL_robot extends AdvancedRobot{
 
     @Override
     public void onBattleEnded(BattleEndedEvent event) {
-//        try {
-//            saveLUT();    // save the statistics
-//        } catch(IOException e){}
+        try {
+            saveLUT();    // save the statistics
+        } catch(IOException e){}
     }
 
     private void saveStats() throws IOException {
