@@ -11,10 +11,8 @@ public class LUT implements LUTInterface{
     private int[] argVariableFloor;
     private int [] argVariableCeiling;
 
-    private int dimensionality = 1;
-
     // lookup table
-    private HashMap<List<Integer>, Double> lookupTable = new HashMap<>();
+    private HashMap<String, Double> lookupTable = new HashMap<>();
 
     /**
      * Constructor. (You will need to define one in your implementation)
@@ -33,54 +31,42 @@ public class LUT implements LUTInterface{
         this.argVariableCeiling = argVariableCeiling;
     }
 
-    public HashMap<List<Integer>, Double> getLookupTable() {
+    public HashMap<String, Double> getLookupTable() {
         return lookupTable;
     }
 
     @Override
-    public void initialiseLUT(boolean learning) {
-//        for(int i=0; i<argNumInputs; i++){
-//            if(argVariableFloor[i] == 0){
-//                dimensionality = dimensionality * 2;
-//            }else {
-//                dimensionality = dimensionality * (argVariableCeiling[i] - argVariableFloor[i]);
-//            }
-//        }
-//
-//        // print the actual number of total states of the LUT initialized
-//        dimensionality = dimensionality * 5; // 5 refers to the number of actions
-//        System.out.println("The dimensionality of the LUT is: " + dimensionality);
-
-        if(!learning){
-            try {
-                load("lookupTable.txt");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+    public void initialiseLUT() {
+        try {
+            load("LUT.dat");
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
     @Override
-    public List<Integer> indexFor(double[] X) {
-        List<Integer> index = new ArrayList<>();
+    public String indexFor(double[] X) {
+        String index = "";
         for(int i = 0; i< X.length; i++){
-            index.add((int)X[i]);
+            index += String.valueOf((int)X[i]);
         }
         return index;
     }
 
     @Override
     public double outputFor(double[] X) {
-        List<Integer> i = indexFor(X);
-        lookupTable.putIfAbsent(i, 0.0);
-        return lookupTable.get(i);
+        String i = indexFor(X);
+        if(lookupTable.containsKey(i)){
+            System.out.println("Found a match state in the LUT! ");
+            return lookupTable.get(i);
+        } else return 0;
     }
 
     @Override
     public double train(double[] X, double argValue) {
-        List<Integer> i = indexFor(X);
+        String i = indexFor(X);
         lookupTable.put(i, argValue);
-        return -Double.NEGATIVE_INFINITY;
+        return 0;
     }
 
     @Override
@@ -98,13 +84,13 @@ public class LUT implements LUTInterface{
         try {
             DataOutputStream writeLUT = new DataOutputStream(new FileOutputStream(lutFile, false));
 
-            for(Map.Entry<List<Integer>, Double> entry : lookupTable.entrySet()){
-                for(Integer i : entry.getKey()) {
-                    writeLUT.writeInt(i);
-                }
-                writeLUT.writeDouble(entry.getValue());
-                writeLUT.writeBytes(newLine);
-            }
+//            for(Map.Entry<String, Double> entry : lookupTable.entrySet()){
+//                for(String i : entry.getKey()) {
+//                    writeLUT.writeInt(i);
+//                }
+//                writeLUT.writeDouble(entry.getValue());
+//                writeLUT.writeBytes(newLine);
+//            }
             writeLUT.close();
 
         } catch(IOException e){
