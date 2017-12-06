@@ -18,5 +18,7 @@
       </library>
     </orderEntry>
     <orderEntry type="library" exported="" name="robocode" level="project" />
+    <orderEntry type="library" name="Aij_main" level="project" />
+    <orderEntry type="module" module-name="encog-java-core-master_main" />
   </component>
 </module>

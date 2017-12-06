@@ -48,7 +48,7 @@ public class LUT implements LUTInterface{
     public String indexFor(double[] X) {
         String index = "";
         for(int i = 0; i< X.length; i++){
-            index += String.valueOf((int)X[i]);
+            index += String.valueOf((int)X[i]) + ",";
         }
         return index;
     }
@@ -67,6 +67,15 @@ public class LUT implements LUTInterface{
         String i = indexFor(X);
         lookupTable.put(i, argValue);
         return 0;
+    }
+
+    public double[] decodeKey(String key){
+        double[] X = new double[argNumInputs];
+        char[] charArray = key.toCharArray();
+        for (int i = 0; i < argNumInputs; i++){
+            X[i] = charArray[i];
+        }
+        return X;
     }
 
     @Override

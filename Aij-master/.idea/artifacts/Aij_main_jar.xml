@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="Aij_main:jar">
+    <output-path>$PROJECT_DIR$/classes/artifacts/Aij_main_jar</output-path>
+    <root id="archive" name="Aij_main.jar">
+      <element id="module-output" name="Aij_main" />
+    </root>
+  </artifact>
+</component>

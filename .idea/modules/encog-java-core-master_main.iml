@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module external.linked.project.id="encog-java-core-master:main" external.linked.project.path="$MODULE_DIR$/../../lib/encog-java-core-master" external.root.project.path="$MODULE_DIR$/../../lib/encog-java-core-master" external.system.id="GRADLE" external.system.module.group="org.encog" external.system.module.type="sourceSet" external.system.module.version="3.4.1" type="JAVA_MODULE" version="4">
+  <component name="NewModuleRootManager" LANGUAGE_LEVEL="JDK_1_7">
+    <output url="file://$MODULE_DIR$/../../lib/encog-java-core-master/out/production/classes" />
+    <exclude-output />
+    <content url="file://$MODULE_DIR$/../../lib/encog-java-core-master/src/main">
+      <sourceFolder url="file://$MODULE_DIR$/../../lib/encog-java-core-master/src/main/java" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/../../lib/encog-java-core-master/src/main/resources" type="java-resource" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

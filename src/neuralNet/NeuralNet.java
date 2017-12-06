@@ -21,27 +21,28 @@ public class NeuralNet implements NeuralNetInterface {
     private boolean argUseBipolarHiddenNeurons;
 
     /*
-    HashMap to store the net input and output of the neurons
+    Hidden neurons, inputs, output, expectedOutput
     */
-    private HashMap<Integer, Double> neuronOutput = new HashMap<>();
+    private double[] hiddenNeuron;
+    private double[] inputNeuron;
+    private double[] outputNeuron;
+    private double[] expectedOutput;
 
     /*
-    HashMap to store the output of input neurons
-    Integer 01, 02
+    array to store the weight of connections
      */
-    private HashMap<Integer, Double> inputs = new HashMap<>();
+    private double[][] weightInputHidden;   // +1 for bias neuron
+    private double[][] weightHiddenOutput;
 
-    /*
-     HashMap to store the weight of connections
-     Four digits number 1234
-     1, 3 - indicates the layer: 0 for input, 1 for hidden, 2 for output
-     2, 4 - indicates the neuron, range: 0 for bias, 1...2 for input, 1...4 for hidden, 1 for output
-     */
-    private HashMap<Integer, Double> connectionWeight = new HashMap<>();
+    // store the previousDeltaWeight for each connection
+    private double[][] deltaWeightInputHidden;
+    private double[][] deltaWeightHiddenOutput;
+    private double[][] prevInputHiddenDeltaWeight;
+    private double[][] prevHiddenOutputDeltaWeight;
 
-    // HashMap to store the deltaWeight and previousDeltaWeight for each connection
-    private HashMap<Integer, Double> deltaWeight = new HashMap<>();
-    private HashMap<Integer, Double> previousDeltaWeight = new HashMap<>();
+    // errors - unit neuron
+    private double[] erro;
+    private double[] errh;
 
 
     /**
@@ -74,6 +75,22 @@ public class NeuralNet implements NeuralNetInterface {
         this.argA = argA;
         this.argB = argB;
         this.argUseBipolarHiddenNeurons = argUseBipolarHiddenNeurons;
+
+        hiddenNeuron = new double[argNumHidden];
+        inputNeuron = new double[argNumInputs];
+        outputNeuron = new double[argNumOutputs];
+        expectedOutput = new double[argNumOutputs];
+
+        weightInputHidden = new double[argNumInputs+1][argNumHidden];
+        weightHiddenOutput = new double[argNumHidden+1][argNumOutputs];
+
+        deltaWeightInputHidden = new double[argNumInputs+1][argNumHidden];
+        deltaWeightHiddenOutput = new double[argNumHidden+1][argNumOutputs];
+        prevInputHiddenDeltaWeight = new double[argNumInputs+1][argNumHidden];
+        prevHiddenOutputDeltaWeight = new double[argNumHidden+1][argNumOutputs];
+
+        erro = new double[argNumOutputs];
+        errh = new double[argNumHidden];
     }
 
     /**
@@ -82,7 +99,7 @@ public class NeuralNet implements NeuralNetInterface {
      */
     private double getRandom(){
         final Random rand = new Random();
-        return rand.nextDouble() - 0.5; // [-0.5;0.5]
+        return (rand.nextDouble() - 0.5) * 0.01; // [-0.005;0.005]
     }
 
     /**
@@ -101,32 +118,34 @@ public class NeuralNet implements NeuralNetInterface {
 
     @Override
     public double customSigmoid(double x) {
-        // not used for this part
-        return 0;
+        return 2*argB/(1 + Math.exp(-x))+argA;
+    }
+
+    private double sigmoidDerivative(final double val){
+        if(Constants.CUSTOM_SIGMOID) return ((1.0 + val) * (1.0 - val));
+        else if(argUseBipolarHiddenNeurons) return (0.5 * (1.0 + val) * (1.0 - val));
+        else return (val * (1.0 - val));
     }
 
     @Override
     public void initializeWeights() {
         // initialize weight for connections between hidden layer and input layer
-        for(int p = 11; p < 11+argNumHidden; p++) {
-            for (int i = 0; i < argNumInputs+1; i++){
-                connectionWeight.put(p*100 + i, getRandom());
-
+        for (int input = 0; input < argNumInputs + 1; input++){         // +1 for bias
+            for(int hidden = 0; hidden < argNumHidden; hidden++) {
+                weightInputHidden[input][hidden] = getRandom();
                 // initialize the previousDeltaWeight to 0
-                previousDeltaWeight.put(p*100 + i, 0.0);
+                prevInputHiddenDeltaWeight[input][hidden] = 0.0;
             }
         }
 
         // initialize weight for connections between output layer and hidden layer
-        for(int p = 21; p < 21+argNumOutputs; p++) {
-            for (int i = 10; i < 11 + argNumHidden; i++) {
-                connectionWeight.put(p*100 + i, getRandom());
-
+        for (int hidden = 0; hidden < argNumHidden + 1; hidden++) {     // +1 for bias
+            for(int output = 0; output < argNumOutputs; output++) {
+                weightHiddenOutput[hidden][output] = getRandom();
                 // initialize the previousDeltaWeight to 0
-                previousDeltaWeight.put(p*100 + i, 0.0);
+                prevHiddenOutputDeltaWeight[hidden][output] = 0.0;
             }
         }
-
     }
 
     /**
@@ -135,17 +154,21 @@ public class NeuralNet implements NeuralNetInterface {
      */
     @Override
     public void setAllWeights(double weight) {
-        // Zero weight for connections between hidden layer and input layer
-        for(int p = 11; p <= 10+argNumHidden; p++) {
-            for (int i = 0; i <= argNumInputs+1; i++) {
-                connectionWeight.put(p*100 + i, weight);
+        // initialize weight for connections between hidden layer and input layer
+        for (int input = 0; input < argNumInputs + 1; input++){         // +1 for bias
+            for(int hidden = 0; hidden < argNumHidden; hidden++) {
+                weightInputHidden[input][hidden] = weight;
+                // initialize the previousDeltaWeight to 0
+                prevInputHiddenDeltaWeight[input][hidden] = 0.0;
             }
         }
 
-        // Zero weight for connections between output layer and hidden layer
-        for(int p = 21; p <= 20+argNumOutputs; p++) {
-            for (int i = 10; i <= 10 + argNumHidden; i++) {
-                connectionWeight.put(p * 100 + i, weight);
+        // initialize weight for connections between output layer and hidden layer
+        for (int hidden = 0; hidden < argNumHidden + 1; hidden++) {     // +1 for bias
+            for(int output = 0; output < argNumOutputs; output++) {
+                weightHiddenOutput[hidden][output] = weight;
+                // initialize the previousDeltaWeight to 0
+                prevHiddenOutputDeltaWeight[hidden][output] = 0.0;
             }
         }
     }
@@ -158,7 +181,7 @@ public class NeuralNet implements NeuralNetInterface {
     @Override
     public double outputFor(double[] X) {
         feedforward(X);
-        return neuronOutput.get(21);
+        return outputNeuron[0];
     }
 
     /**
@@ -170,15 +193,13 @@ public class NeuralNet implements NeuralNetInterface {
     @Override
     public double train(double[] X, double argValue) {
 
+        // feed forward all the values
         feedforward(X);
 
+        // perform error back propagation - argValue is the expected result
         backPropagation(argValue);
 
-        if(!Constants.IMMEDIATE_WEIGHT_UPDATE) {
-            updateWeight();
-        }
-
-        return neuronOutput.get(21);
+        return outputNeuron[0];
     }
 
     @Override
@@ -193,149 +214,89 @@ public class NeuralNet implements NeuralNetInterface {
 
     /**
      * apply the feed forward of the input
-     * @param input The input arrays.
+     * @param X The input arrays.
      */
-    private void feedforward(double[] input){
-        // store inputs into the HashMap
+    private void feedforward(double[] X){
+        double sum;
+
+        // store inputs into input neurons
         for(int i = 0; i<argNumInputs; i++) {
-            inputs.put(i+1, input[i]);
+            inputNeuron[i] = X[i];
         }
 
-        // calculate and store the output into HashMap
-        for(int i=11; i < 11+argNumHidden; i++){ // loop over all neurons in the hidden layer ID = 11, 12, 13, 14
-            calculateOutput(i);
-        }
-        for(int i=21; i < 21+argNumOutputs; i++){ // loop over all output neurons ID = 21
-            calculateOutput(i);
-        }
-    }
-
-    /**
-     * calculate the output for a given neuron
-     * @param i The id index of the neuron, 1x for hidden layer, 2x for output layer
-     */
-    private void calculateOutput(int i) {
-        double z_in = 0.0;
-        if(10<i && i<11+argNumHidden) { // hidden layer
-            for(int j = 1; j <= argNumInputs; j++) {
-                z_in += connectionWeight.get(i * 100 + j) * inputs.get(j);
+        // calculate input to the hidden neurons, and store the output of the hidden neurons
+        for(int hidden = 0; hidden < argNumHidden; hidden++){   // loop over all neurons in the hidden layer
+            sum = 0.0;
+            for(int input = 0; input < argNumInputs; input++) { // loop over all neurons in the input layer
+                sum += inputNeuron[input] * weightInputHidden[input][hidden];
             }
-            z_in += connectionWeight.get(1100);
+            sum += weightInputHidden[argNumInputs][hidden];     // add bias
+            if(Constants.CUSTOM_SIGMOID) hiddenNeuron[hidden] = customSigmoid(sum);
+            else hiddenNeuron[hidden] = sigmoid(sum);
+        }
 
-            // activation function
-            z_in = sigmoid(z_in);
-
-            // store the output in the HashMap
-            neuronOutput.put(i, z_in);
-
-        } else if (20<i && i<21+argNumOutputs){ // output layer
-            for(int j = 11; j < 11 + argNumHidden; j++) {
-                z_in += connectionWeight.get(i * 100 + j) * neuronOutput.get(j);
+        // calculate input to the output neurons, and store the output of the output neurons
+        for(int out = 0; out < argNumOutputs; out++){   // loop over all neurons in the output layer
+            sum = 0.0;
+            for(int hid = 0; hid < argNumHidden; hid++) { // loop over all neurons in the hidden layer
+                sum += hiddenNeuron[hid] * weightHiddenOutput[hid][out];
             }
-            z_in += connectionWeight.get(2110);
-
-            // activation function
-            z_in = sigmoid(z_in);
-            neuronOutput.put(i, z_in);
-        } else {
-            throw new java.lang.RuntimeException("This neuron id is out of range!");
+            sum += weightHiddenOutput[argNumHidden][out];     // add bias
+            if(Constants.CUSTOM_SIGMOID) outputNeuron[out] = customSigmoid(sum);
+            else outputNeuron[out] = sigmoid(sum);
         }
     }
 
     /**
      * apply error back propagation of the neural network.
-     * @param expectedOutput The expected output for the neural network.
+     * @param expectedOutputs The expected output for the neural network.
      */
-    private void backPropagation(Double expectedOutput){
-
-        int output_neuron_id = 21;
-        double y = neuronOutput.get(output_neuron_id);
-        double output_error_infoTerm;
-
-        // compute the error information term for each output neuron
-        if(argUseBipolarHiddenNeurons){
-            output_error_infoTerm = (expectedOutput - y) * 0.5 * (1 - Math.pow(y,2));
-        } else {
-            output_error_infoTerm = (expectedOutput - y) * y * (1 - y);
+    private void backPropagation(double expectedOutputs){
+        // calculate the output layer error
+        for(int out = 0; out < argNumOutputs; out++) {
+            // compute the error information term for each output neuron
+            erro[out] = (expectedOutputs - outputNeuron[out]) * sigmoidDerivative(outputNeuron[out]);      // step 6.1 error information
+            // compute the weight correction term
+            for(int hid = 0; hid < argNumHidden; hid++) {
+                deltaWeightHiddenOutput[hid][out] = argLearningRate * erro[out] * hiddenNeuron[hid];        // step 6.2 weight correction
+            }
+            deltaWeightHiddenOutput[argNumHidden][out] = argLearningRate * erro[out];       // step 6.3 bias weight correction term
         }
 
-        // compute the weight correction term for output/bias connection
-        deltaWeight.put(2110, argLearningRate * output_error_infoTerm);
-
-        // immediate weight update
-        if(Constants.IMMEDIATE_WEIGHT_UPDATE){
-            connectionWeight.put(2110, connectionWeight.get(2110) + deltaWeight.get(2110) + argMomentumTerm * previousDeltaWeight.get(2110));
-            previousDeltaWeight.put(2110, deltaWeight.get(2110));
+        // calculate the hidden layer error
+        for(int hid = 0; hid < argNumHidden; hid++) {       // loop through all hidden neurons
+            double sumDeltaInput = 0.0;
+            for(int out = 0; out < argNumOutputs; out++) {
+                sumDeltaInput += erro[out] * weightHiddenOutput[hid][out];      // step 7.1 delta inputs
+            }
+            errh[hid] = sumDeltaInput * sigmoidDerivative(hiddenNeuron[hid]);      // step 7.2  hidden neuron error information term
+            // compute weight correction term
+            for(int in = 0; in < argNumInputs; in++){
+                deltaWeightInputHidden[in][hid] = argLearningRate * errh[hid] * inputNeuron[in];    // step 7.3 weight correction
+            }
+            deltaWeightInputHidden[argNumInputs][hid] = argLearningRate * errh[hid];       // step 7.4 bias weight correction
         }
 
-        for(int i=11; i<11+argNumHidden; i++) { // loop through the hidden layers
-            // compute the weight correction term for each output/hidden connection
-            deltaWeight.put(2100+i, argLearningRate * output_error_infoTerm * neuronOutput.get(i));
-
-            if(Constants.IMMEDIATE_WEIGHT_UPDATE){
-                connectionWeight.put(2100+i, connectionWeight.get(2100+i)+deltaWeight.get(2100+i)+ argMomentumTerm * previousDeltaWeight.get(2100+i));
-                previousDeltaWeight.put(2100, deltaWeight.get(2100+i));;
+        // Update the weights for hidden/output connection.
+        for(int out = 0; out < argNumOutputs; out++) {
+            for(int hid = 0; hid < argNumHidden; hid++) {
+                weightHiddenOutput[hid][out] += deltaWeightHiddenOutput[hid][out] + argMomentumTerm * prevHiddenOutputDeltaWeight[hid][out];
+                prevHiddenOutputDeltaWeight[hid][out] = deltaWeightHiddenOutput[hid][out];
             }
+            weightHiddenOutput[argNumHidden][out] += deltaWeightHiddenOutput[argNumHidden][out] + argMomentumTerm * prevHiddenOutputDeltaWeight[argNumHidden][out]; // Update the bias.
+            prevHiddenOutputDeltaWeight[argNumHidden][out] = deltaWeightHiddenOutput[argNumHidden][out];
+        }
 
-            // delta input for hidden neurons from the output layer
-            double deltaInput = output_error_infoTerm * connectionWeight.get(2100+i);
-            double zj = neuronOutput.get(i);
-            double hidden_error_infoTerm;
-            if(argUseBipolarHiddenNeurons) {
-                hidden_error_infoTerm = deltaInput * 0.5 * (1 - Math.pow(zj,2));
-            } else {
-                hidden_error_infoTerm = deltaInput *  zj * (1 - zj);
+        // Update the weights for input/hidden connections
+        for(int hid = 0; hid < argNumHidden; hid++) {
+            for(int in = 0; in < argNumInputs; in++) {
+                weightInputHidden[in][hid] += deltaWeightInputHidden[in][hid] + argMomentumTerm * prevInputHiddenDeltaWeight[in][hid];
+                prevInputHiddenDeltaWeight[in][hid] = deltaWeightInputHidden[in][hid] * 1;
             }
-
-            // calculate the weight correction for hidden/input connection
-            for(int j=1; j<1+argNumInputs; j++) {
-                deltaWeight.put(i * 100 + j, argLearningRate * hidden_error_infoTerm * inputs.get(j));
-                if(Constants.IMMEDIATE_WEIGHT_UPDATE){
-                    connectionWeight.put(i * 100 + j, connectionWeight.get(i * 100 + j) + deltaWeight.get(i * 100 + j)+ argMomentumTerm * previousDeltaWeight.get(i * 100 + j));
-                    previousDeltaWeight.put(i * 100 + j, deltaWeight.get(i * 100 + j));
-                }
-            }
-
-            // compute the delta weight for the hidden/bias connections
-            deltaWeight.put(i*100, argLearningRate * hidden_error_infoTerm);
-
-            if(Constants.IMMEDIATE_WEIGHT_UPDATE){
-                connectionWeight.put(i*100, connectionWeight.get(i*100) + deltaWeight.get(i*100) + argMomentumTerm * previousDeltaWeight.get(i * 100));
-                previousDeltaWeight.put(i * 100, deltaWeight.get(i * 100));
-            }
+            weightInputHidden[argNumInputs][hid] += deltaWeightInputHidden[argNumInputs][hid] + argMomentumTerm * prevInputHiddenDeltaWeight[argNumInputs][hid]; // Update the bias.
+            prevInputHiddenDeltaWeight[argNumInputs][hid] = deltaWeightInputHidden[argNumInputs][hid] * 1;
         }
     }
-
-
-    /**
-     * Update the weight of all connections, and store the previous delta weight
-     */
-    private void updateWeight(){
-        // update all connection weight
-        connectionWeight.replaceAll((key, value) -> value + deltaWeight.get(key) + argMomentumTerm * previousDeltaWeight.get(key));
-
-        // update the previous delta weight
-        previousDeltaWeight.replaceAll((key,value) -> deltaWeight.get(key));
-    }
-
-    /**
-     *  getter for weight (for testing)
-     * @param id The id of the connection
-     * @return Weight of the connection
-     */
-    public double getWeight(int id){
-        return connectionWeight.get(id);
-    }
-
-    /**
-     * getter for the output of a neuron (for testing)
-     * @param id The id of the neuron.
-     * @return The output of the neuron.
-     */
-    public double getOutput(int id){
-        return neuronOutput.get(id);
-    }
-
 
     /**
      * print the training result to the console or a txt file
@@ -349,7 +310,7 @@ public class NeuralNet implements NeuralNetInterface {
     public void printTrainResult(double[][] inputs, double expectedOutputs[], double actualResult[], double error, int epoch, boolean saveToFile, String fileName) {
 
         // print the training result to the console
-        System.out.print("Epoch: " + epoch +"\n");
+        System.out.print("Epoch: " + epoch +", ");
         for (int p = 0; p < inputs.length; p++) {
             System.out.print("INPUTS: ");
             for (int x = 0; x < argNumInputs; x++) {

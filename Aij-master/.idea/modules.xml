@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/Aij.iml" filepath="$PROJECT_DIR$/.idea/modules/Aij.iml" />
+      <module fileurl="file://$PROJECT_DIR$/Aij-master.iml" filepath="$PROJECT_DIR$/Aij-master.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/Aij_main.iml" filepath="$PROJECT_DIR$/.idea/modules/Aij_main.iml" group="Aij" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/Aij_test.iml" filepath="$PROJECT_DIR$/.idea/modules/Aij_test.iml" group="Aij" />
+    </modules>
+  </component>
+</project>

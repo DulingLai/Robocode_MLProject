@@ -2,10 +2,8 @@ package bots;
 
 import lookupTable.LUT;
 import robocode.*;
-import robocode.util.Utils;
 
 import java.awt.Color;
-import java.awt.geom.Point2D;
 import java.io.*;
 import java.text.DecimalFormat;
 import java.util.*;
@@ -22,14 +20,16 @@ public class RL_robot extends AdvancedRobot {
 
     /*
      state-action space
-     6 States: deltaX/Y from enemy, enemy heading, enemy velocity; deltaX/Y from center, energy level;
+     6 States: deltaX/Y from enemy, enemy velocity; deltaX/Y from center, energy level;
      Quantization:
-        deltaX/Y from enemy: -16~+16
+        deltaX from enemy: -8~+8
+        deltaY from enemy: -6~+6
         enemy velocity: 0 - stationary (v<1); 1 - moving
-        delta X,Y from center: -8~+8
+        delta X from center: -4~+4
+        delta Y from center: -3~+3
         our own energy level: 0 - lower than 40; 1 - higher than 40
      5 Actions: move up/down/left/right; fire (linear/circular)
-     State-Action space: 33*2*17*2*5 = 11220
+     State-Action space: 17*13*2*9*7*2*5 = 278460
       */
 
     private static double[][] stateActionTable = {
@@ -54,23 +54,22 @@ public class RL_robot extends AdvancedRobot {
     private static double currentQ = 0.0;
 
     // Control exploring and learning
-    private static final boolean learning = false;
+    private static final boolean learning = true;
     private static final boolean exploring = true;
     private static final boolean onPolicy = false;
-    private static final boolean enableInstantRewards = true;
-    private static final double epsilon = 0.05; // % exploration when turned on
+    private static final boolean terminalRewardOnly = false;
+    private static final double epsilon = 0.25; // % exploration when turned on
 
     /*
     Statistics of learning
      */
-    private static final int AVERAGE_SAMPLE_SIZE = 1000; // number of rounds which average is calculated
+    private static final int AVERAGE_SAMPLE_SIZE = 500; // number of rounds which average is calculated
     private static int sampleCount = 0;
     private static int numWins = 0;
 
     // Total accumulated rewards
     private static double accumulatedRewards = 0.0;
-    private static double avgAccumulatedRewards = 0.0;
-    private boolean instantReward = true;
+    private static double avgSumRewards = 0.0;
 
     private static int numBackSteps = 0;
     private static double averageSumQ = 0.0;
@@ -81,7 +80,6 @@ public class RL_robot extends AdvancedRobot {
     private static int numBulletHit = 0;
     private static int numBulletHitBullet = 0;
     private static int numHitByBullet = 0;
-    private static double hitBulletPower = 0.0;
 
     private static double totalNNSquaredError = 0;
     private static int winForAutosaving = 100; // automatically save the weights after number of wins
@@ -104,11 +102,11 @@ public class RL_robot extends AdvancedRobot {
     private static final double gunPower = 2;
 
     // Distance moved each step
-    private static final int stepDistance = 50;
+    private static final int stepDistance = 100;
     private static final int wallBuffer = 150;
 
     // x,y scaling factor (for quantization); for example, if scalingFactor = 0.01: x_states = 800 * 0.01 = 8;
-    private static final double scalingFactor = 0.02;
+    private static final double scalingFactor = 0.01;
     // constants for arena dimension
     private static final double arenaWidth = 800;
     private static final double arenaHeight = 600;
@@ -216,12 +214,15 @@ public class RL_robot extends AdvancedRobot {
             switch (mode){
                 case SCAN:
                     // wait until all actions have been performed and then we scan
-                    if(getAllEvents().isEmpty()) turnRadarRight(45);
+                    if(getAllEvents().isEmpty()) {
+                        setTurnRadarRight(45);
+                        execute();
+                    }
                     break;
 
                 case SELECT:
                     // do a back-step
-                    backStep(accumulatedRewards);
+                    if(learning) backStep(accumulatedRewards);
 
                     // here we select the action based on state and maxQ (epsilon greedy)
                     updateStateAction();
@@ -243,6 +244,8 @@ public class RL_robot extends AdvancedRobot {
 
         // initialize max Q to -infinity
         double maxQ = Double.NEGATIVE_INFINITY;
+        double tempQ;
+        Random rand = new Random();
 
         // check if the robot is close to the wall: if it is, set the flags accordingly
         checkCloseToWall();
@@ -253,30 +256,49 @@ public class RL_robot extends AdvancedRobot {
             // select the action with max Q
             switch (action) {
                 case FIRE:
-                    maxQ = checkForMaxQ(maxQ, action);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    if(tempQ > maxQ) {
+                        maxQ = tempQ;
+                        selectedAction = action;
+                    } else if (tempQ == maxQ) selectedAction = (rand.nextBoolean()) ? action:selectedAction;
                     break;
 
                 case LEFT:
-                    maxQ = checkForMaxQ(maxQ, action);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    if(tempQ > maxQ) {
+                        maxQ = tempQ;
+                        selectedAction = action;
+                    }else if (tempQ == maxQ) selectedAction = (rand.nextBoolean()) ? action:selectedAction;
                     break;
 
                 case RIGHT:
-                    maxQ = checkForMaxQ(maxQ, action);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    if(tempQ > maxQ) {
+                        maxQ = tempQ;
+                        selectedAction = action;
+                    } else if (tempQ == maxQ) selectedAction = (rand.nextBoolean()) ? action:selectedAction;
                     break;
 
                 case UP:
-                    maxQ = checkForMaxQ(maxQ, action);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    if(tempQ > maxQ) {
+                        maxQ = tempQ;
+                        selectedAction = action;
+                    } else if (tempQ == maxQ) selectedAction = (rand.nextBoolean()) ? action:selectedAction;
                     break;
 
                 case DOWN:
-                    maxQ = checkForMaxQ(maxQ, action);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    if(tempQ > maxQ) {
+                        maxQ = tempQ;
+                        selectedAction = action;
+                    } else if (tempQ == maxQ) selectedAction = (rand.nextBoolean()) ? action:selectedAction;
                     break;
             }
         }
 
         // The following will override the selected action if exploring is turned on
         if (exploring) {
-            Random rand = new Random();
             // epsilon greedy policy
             if (rand.nextDouble() < epsilon) {
                 int i = rand.nextInt(NUM_ACTIONS);  //generates a random number between 0 and NUM_ACTIONS-1
@@ -349,7 +371,8 @@ public class RL_robot extends AdvancedRobot {
     private void aimFire() {
         double gunTurnAmount = normalRelativeAngle(currentEnemyBearingRadians + getHeadingRadians() - getGunHeadingRadians());
         setTurnGunRightRadians(gunTurnAmount);
-        if (getGunHeat() == 0 && Math.abs(getGunTurnRemainingRadians()) < 0.1745) setFire(gunPower);
+        if (getGunHeat() == 0 && Math.abs(getGunTurnRemainingRadians()) < Math.toRadians(10))
+            setFire(gunPower);
     }
 
     private double limit(double value, double min, double max) {
@@ -415,22 +438,6 @@ public class RL_robot extends AdvancedRobot {
             stateActionTable[i.ordinal()][4] = yFromCenterQuantized;
             stateActionTable[i.ordinal()][5] = energyLevel;
         }
-    }
-
-    private double checkForMaxQ(double maxQ, RobotActions action) {
-        double tempQ;
-        Random rand = new Random();
-        tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
-        if (tempQ == maxQ) {
-            if (rand.nextBoolean()) selectedAction = action;
-        } else if (tempQ > maxQ) {
-            maxQ = tempQ;
-            selectedAction = action;
-        }
-        if(debug) {
-            if(maxQ != 0) System.out.println("Selected Action is: " + action + "; Q value is: " + maxQ);
-        }
-        return maxQ;
     }
 
     private void checkCloseToWall() {
@@ -540,7 +547,7 @@ public class RL_robot extends AdvancedRobot {
         double bulletPower = event.getPower();
 //        hitBulletPower = Rules.getBulletHitBonus(bulletPower);
         double reward = -(Rules.getBulletDamage(bulletPower) + Rules.getBulletHitBonus(bulletPower));
-
+        if(terminalRewardOnly) reward = 0;
 //        if(learning) backStep(reward);
         accumulatedRewards+=reward;
         numHitByBullet++;
@@ -555,8 +562,10 @@ public class RL_robot extends AdvancedRobot {
     @Override
     public void onHitWall(HitWallEvent event) {
         double reward = -4;
+        if(terminalRewardOnly) reward = 0;
         accumulatedRewards += reward;
 //        if(learning) backStep(reward);
+
         numWallHit++;
     }
 
@@ -567,6 +576,7 @@ public class RL_robot extends AdvancedRobot {
     @Override
     public void onHitRobot(HitRobotEvent event) {
         double reward = -1;
+        if(terminalRewardOnly) reward = 0;
         accumulatedRewards += reward;
 //        if(learning) backStep(reward);
     }
@@ -576,12 +586,14 @@ public class RL_robot extends AdvancedRobot {
              */
     @Override
     public void onDeath(DeathEvent event) {
-        double reward = -50;
+        double reward = -100;
         if(learning) {
             double previousQ = myLUT.outputFor(currentStateAction);
             double errorQ = ALPHA * (GAMMA * reward - previousQ);
             myLUT.train(previousStateAction, previousQ + errorQ);
             averageErrorQ += errorQ;
+            avgSumRewards += accumulatedRewards;
+            accumulatedRewards = 0;
         }
     }
 
@@ -629,6 +641,7 @@ public class RL_robot extends AdvancedRobot {
     public void onBulletHit(BulletHitEvent event) {
         double reward = Rules.getBulletHitBonus(gunPower)+Rules.getBulletDamage(gunPower);
 //        if(learning)backStep(reward);
+        if(terminalRewardOnly) reward = 0;
         accumulatedRewards += reward;
         numBulletHit++;
     }
@@ -637,6 +650,7 @@ public class RL_robot extends AdvancedRobot {
     public void onBulletHitBullet(BulletHitBulletEvent event) {
         double reward = event.getHitBullet().getPower() - event.getBullet().getPower();
 //        if(learning)backStep(reward);
+        if(terminalRewardOnly) reward = 0;
         accumulatedRewards += reward;
         numBulletHitBullet++;
     }
@@ -653,6 +667,8 @@ public class RL_robot extends AdvancedRobot {
             myLUT.train(previousStateAction, previousQ + errorQ);
             averageErrorQ += errorQ;
         }
+        avgSumRewards += accumulatedRewards;
+        accumulatedRewards = 0;
     }
 
     private void backStep(double reward) {
@@ -667,6 +683,7 @@ public class RL_robot extends AdvancedRobot {
         // set the current state action pair as the previous one
 //        System.arraycopy(currentStateAction, 0, previousStateAction, 0, NUM_STATES + 1);
 
+        avgSumRewards += accumulatedRewards;
         accumulatedRewards = 0;
     }
 
@@ -682,7 +699,7 @@ public class RL_robot extends AdvancedRobot {
           */
         if ((sampleCount % AVERAGE_SAMPLE_SIZE == 0) && sampleCount != 0) {
             sumAvgErrorQ = sumAvgErrorQ/AVERAGE_SAMPLE_SIZE;
-            avgAccumulatedRewards = avgAccumulatedRewards/AVERAGE_SAMPLE_SIZE;
+            avgSumRewards = avgSumRewards/AVERAGE_SAMPLE_SIZE;
             try {
                 saveStats();    // save the statistics
             } catch (IOException e) {
@@ -690,12 +707,12 @@ public class RL_robot extends AdvancedRobot {
             }
             numWins = 0;
             sumAvgErrorQ = 0;
+            avgSumRewards = 0;
         }
 
         // calculate average error Q
         averageErrorQ = averageErrorQ / numBackSteps;
         sumAvgErrorQ += averageErrorQ;
-        avgAccumulatedRewards += accumulatedRewards;
         averageSumQ = averageSumQ / numBackSteps;
 
         // reset number of back step and averageErrorQ
@@ -725,7 +742,7 @@ public class RL_robot extends AdvancedRobot {
     private void saveStats() throws IOException {
         OutputStreamWriter w = new OutputStreamWriter(new RobocodeFileOutputStream(getDataFile("statistics.txt").getAbsolutePath(), true));
         BufferedWriter writer = new BufferedWriter(w);
-        writer.write(sampleCount + ", " + numWins + ", " + dfR.format(sumAvgErrorQ) + ", " + dfR.format(accumulatedRewards) + ", "
+        writer.write(sampleCount + ", " + numWins + ", " + dfR.format(sumAvgErrorQ) + ", " + dfR.format(avgSumRewards) + ", "
                 + numBackSteps + ", " + numWallHit + ", " + numHitByBullet + ", " + numBulletHit + ", " + numBulletHitBullet + "\n");
         writer.flush();
         writer.close();
@@ -741,10 +758,15 @@ public class RL_robot extends AdvancedRobot {
 //                if(writeString) writer.writeUTF(String.valueOf(i) + ", ");
 //                else writer.writeInt(i);
 //            }
-            if(writeString)writer.writeUTF(entry.getValue().toString() + "\n");
-            else writer.writeDouble(entry.getValue());
+            if(writeString){
+                writer.writeUTF(entry.getKey() + ", ");
+                writer.writeUTF(entry.getValue().toString() + "\n");
+            }
+            else {
+                writer.writeChars(entry.getKey());
+                writer.writeDouble(entry.getValue());
+            }
         }
-        writer.writeUTF(String.valueOf(myLUT.getLookupTable().size()));
         writer.close();
     }
 
