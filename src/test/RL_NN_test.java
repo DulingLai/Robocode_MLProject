@@ -90,7 +90,6 @@ public class RL_NN_test {
         /*
         Online training
          */
-        GenerateRandom rnd = new MersenneTwisterGenerateRandom(42);
         new XaiverRandomizer(42).randomize(network);
         final StochasticGradientDescent sgd = new StochasticGradientDescent(network, trainingSet);
         sgd.setLearningRate(0.05);

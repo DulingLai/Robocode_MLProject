@@ -1,6 +1,17 @@
 package bots;
 
 import lookupTable.LUT;
+import org.encog.engine.network.activation.ActivationSigmoid;
+import org.encog.mathutil.randomize.ConsistentRandomizer;
+import org.encog.persist.EncogDirectoryPersistence;
+import org.encog.ml.data.MLData;
+import org.encog.ml.data.MLDataSet;
+import org.encog.ml.data.basic.BasicMLData;
+import org.encog.ml.data.basic.BasicMLDataSet;
+import org.encog.neural.networks.BasicNetwork;
+import org.encog.neural.networks.layers.BasicLayer;
+import org.encog.neural.networks.training.propagation.sgd.StochasticGradientDescent;
+import org.encog.neural.networks.training.propagation.sgd.update.MomentumUpdate;
 import robocode.*;
 import robocode.util.Utils;
 
@@ -10,7 +21,6 @@ import java.awt.geom.Rectangle2D;
 import java.io.*;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
-import java.util.Map;
 import java.util.Random;
 
 import static robocode.util.Utils.normalRelativeAngle;
@@ -71,8 +81,8 @@ public class BasicWaveSurferBot extends AdvancedRobot{
     private static double[][] stateActionTable = {
             {0, 0, 0, 0, 0, 1, 0, 0, 0},             // pre-populated for action surf
             {0, 0, 0, 0, 0, 0, 1, 0, 0},             // pre-populated for action fire
-            {0, 0, 0, 0, 0, 0, 0, 1, 0},             // pre-populated for action move close
-            {0, 0, 0, 0, 0, 0, 0, 0, 1},             // pre-populated for action move away
+            {0, 0, 0, 0, 0, 0, 0, 1, 0},             // pre-populated for action close
+            {0, 0, 0, 0, 0, 0, 0, 0, 1},             // pre-populated for action away
     };
 
     // Constants for LUT State actions
@@ -138,6 +148,10 @@ Initialize the instance of look up table
     // initialize the instance of LUT
     private static LUT myLUT = new LUT(NUM_STATES + NUM_ACTIONS, floors, ceilings);
 
+    // declare the neural network
+//    private static BasicNetwork network = new BasicNetwork();
+//    private static final String networkConfig = "network.eg";
+
     /*
      Robocode Main
       */
@@ -159,6 +173,23 @@ Initialize the instance of look up table
 
         // initialize the action to going up
         selectedAction = RobotActions.AWAY;
+
+        // load or configure the neural network
+//        if(getRoundNum() == 0) {
+//            network.addLayer(new BasicLayer(null, true, 9));
+//            network.addLayer(new BasicLayer(new ActivationSigmoid(), true, 17));
+//            network.addLayer(new BasicLayer(new ActivationSigmoid(), false, 1));
+//            network.getStructure().finalizeStructure();
+//            network.reset();
+//            // assign random weights [-0.1, 0.1] to the network
+//            new ConsistentRandomizer(-0.1,0.1, (int)System.currentTimeMillis()%100).randomize(network);
+//        } else{
+//            // load the network config file
+//            network = (BasicNetwork)EncogDirectoryPersistence.loadObject(getDataFile(networkConfig));
+//        }
+
+        // initialize the LUT
+        myLUT.initialiseLUT();
 
         do {
             turnRadarRightRadians(Double.POSITIVE_INFINITY);
@@ -304,7 +335,7 @@ Initialize the instance of look up table
 
     @Override
     public void onBulletHit(BulletHitEvent event) {
-        double reward = (Rules.getBulletHitBonus(gunPower)+Rules.getBulletDamage(gunPower))*rewardFactor;
+        double reward = Rules.getBulletDamage(gunPower)*rewardFactor;
         if(learning)backStep(reward);
         numBackSteps++;
         numBulletHit++;
@@ -325,38 +356,41 @@ Initialize the instance of look up table
     @Override
     public void onRoundEnded(RoundEndedEvent event) {
         sampleCount++;
-        // calculate average error Q
-        averageSumQ = averageSumQ / numBackSteps;
         /*
          auto-save for each 500 samples
           */
-        if ((sampleCount % AVERAGE_SAMPLE_SIZE == 0) && sampleCount != 0) {
+        if (((sampleCount % AVERAGE_SAMPLE_SIZE == 0) && sampleCount != 0)) {
+            // calculate average error Q
+            averageSumQ = averageSumQ / numBackSteps;
+            avgSumRewards = avgSumRewards / AVERAGE_SAMPLE_SIZE;
+
             try {
                 saveStats();    // save the statistics
             } catch (IOException e) {
                 e.printStackTrace();
             }
+            // reset number of back step and averageErrorQ
+            avgSumRewards = 0;
+            numBackSteps = 0;
+            averageSumQ = 0;
+            numWallHit = 0;
+            numBulletHit = 0;
+            numHitByBullet = 0;
             numWins = 0;
         }
 
-        // reset number of back step and averageErrorQ
-        avgSumRewards = 0;
-        numBackSteps = 0;
-        averageSumQ = 0;
-        numBulletHitBullet = 0;
-        numWallHit = 0;
-        numBulletHit = 0;
-        numHitByBullet = 0;
+        // save our neural network info
+//        EncogDirectoryPersistence.saveObject(getDataFile(networkConfig), network);
     }
 
-    @Override
-    public void onBattleEnded(BattleEndedEvent event) {
-        try {
-            saveLUT();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+//    @Override
+//    public void onBattleEnded(BattleEndedEvent event) {
+//        try {
+//            saveLUT();
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//    }
 
     /*
                 Learning related helper methods
@@ -370,6 +404,11 @@ Initialize the instance of look up table
 
         // update the state action table
         for (RobotActions i : RobotActions.values()) {
+//            stateActionTable[i.ordinal()][0] = Math.round(enemyXFromCenter)/100.0;
+//            stateActionTable[i.ordinal()][1] = Math.round(enemyYFromCenter)/100.0;
+//            stateActionTable[i.ordinal()][2] = Math.round(xFromCenter)/100.0;
+//            stateActionTable[i.ordinal()][3] = Math.round(yFromCenter)/100.0;
+            // quantization for LUT
             stateActionTable[i.ordinal()][0] = (double) Math.round(enemyXFromCenter * scalingFactor);
             stateActionTable[i.ordinal()][1] = (double) Math.round(enemyYFromCenter * scalingFactor);
             stateActionTable[i.ordinal()][2] = (double) Math.round(xFromCenter * scalingFactor);
@@ -393,7 +432,8 @@ Initialize the instance of look up table
             // select the action with max Q
             switch (action) {
                 case SURF:
-                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);    // LUT
+//                    tempQ = predict(stateActionTable[action.ordinal()]);
                     if (tempQ > maxQ) {
                         maxQ = tempQ;
                         selectedAction = action;
@@ -401,7 +441,8 @@ Initialize the instance of look up table
                     break;
 
                 case FIRE:
-                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);    // LUT
+//                    tempQ = predict(stateActionTable[action.ordinal()]);
                     if (tempQ > maxQ) {
                         maxQ = tempQ;
                         selectedAction = action;
@@ -409,7 +450,8 @@ Initialize the instance of look up table
                     break;
 
                 case CLOSE:
-                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);    // LUT
+//                    tempQ = predict(stateActionTable[action.ordinal()]);
                     if (tempQ > maxQ) {
                         maxQ = tempQ;
                         selectedAction = action;
@@ -417,7 +459,8 @@ Initialize the instance of look up table
                     break;
 
                 case AWAY:
-                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);
+                    tempQ = myLUT.outputFor(stateActionTable[action.ordinal()]);    //LUT
+//                    tempQ = predict(stateActionTable[action.ordinal()]);
                     if (tempQ > maxQ) {
                         maxQ = tempQ;
                         selectedAction = action;
@@ -447,9 +490,28 @@ Initialize the instance of look up table
     private void backStep(double reward) {
         numBackSteps++;
         // update Q value
-        double previousQ = myLUT.outputFor(previousStateAction);
+//        double previousQ = predict(previousStateAction);    // NN
+        double previousQ = myLUT.outputFor(previousStateAction);    // LUT
         double errorQ = ALPHA * (reward + GAMMA * currentQ - previousQ);
-        myLUT.train(previousStateAction, previousQ + errorQ);
+
+        // Neural Network
+//        double[][] input = new double[][]{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+//        input[0] = previousStateAction;
+//        double[][] expectedOutput = new double[][]{{previousQ + errorQ}};
+//
+//        // set up the gradient descent
+//        MLDataSet trainingSet = new BasicMLDataSet(input,expectedOutput);
+//        final StochasticGradientDescent sgd = new StochasticGradientDescent(network, trainingSet);
+//        // set learning rate
+//        sgd.setLearningRate(0.01);
+//        sgd.setMomentum(0.8);
+//        sgd.setUpdateRule(new MomentumUpdate());
+//
+//        // learning
+//        sgd.iteration();
+
+        // LUT
+        myLUT.train(previousStateAction, previousQ+errorQ);
 
         // statistics
         averageSumQ += errorQ;
@@ -579,10 +641,10 @@ Initialize the instance of look up table
             if (ew.distanceTraveled > _myLocation.distance(ew.fireLocation) + 50) {
                 _enemyWaves.remove(x);
                 x--;
-//
-//                // since we dodged a bullet do a back step here
-//                double reward = 3*rewardFactor;
-//                backStep(reward);
+
+                // since we dodged a bullet do a back step here
+                double reward = 3*rewardFactor;
+                backStep(reward);
             }
         }
     }
@@ -723,47 +785,55 @@ Initialize the instance of look up table
     }
 
     /*
+    Neural network related
+     */
+//    private double predict(double[] inputData){
+//        MLData input = new BasicMLData(inputData);
+//        MLData output = network.compute(input);
+//        return output.getData(0);
+//    }
+
+    /*
     save and load
      */
     private void saveStats() throws IOException {
-        DecimalFormat dfR = new DecimalFormat("0.000");
+        DecimalFormat dfR = new DecimalFormat("0.00000");
         OutputStreamWriter w = new OutputStreamWriter(new RobocodeFileOutputStream(getDataFile("statistics.txt").getAbsolutePath(), true));
         BufferedWriter writer = new BufferedWriter(w);
-        writer.write(sampleCount + ", " + numWins + ", " + dfR.format(averageSumQ) + ", " + dfR.format(avgSumRewards) + ", "
-                + numBackSteps + ", " + numWallHit + ", " + numHitByBullet + ", " + numBulletHit + ", " + numBulletHitBullet + "\n");
+        writer.write(sampleCount + ", " + numWins + ", " + dfR.format(averageSumQ) + ", " + dfR.format(avgSumRewards) + "\n");
         writer.flush();
         writer.close();
     }
 
-    private void saveLUT() throws IOException {
-        DataOutputStream writerString = new DataOutputStream(new RobocodeFileOutputStream(getDataFile("LUT.txt").getAbsolutePath(), true));
-        DataOutputStream writer = new DataOutputStream(new RobocodeFileOutputStream(getDataFile("LUT.dat").getAbsolutePath(), true));
-        for (Map.Entry<String, Double> entry : myLUT.getLookupTable().entrySet()) {
-                writerString.writeUTF(entry.getKey() + ", ");
-                writerString.writeUTF(entry.getValue().toString() + "\n");
-
-                writer.writeUTF(entry.getKey());
-                writer.writeDouble(entry.getValue());
-        }
-        writerString.close();
-        writer.close();
-    }
-
-    private void loadLUT() throws IOException {
-        // Input stream to read in the lookup table values
-        DataInputStream scanner = new DataInputStream(new FileInputStream(getDataFile("LUT.dat")));
-        double[] X = new double[NUM_STATES+NUM_ACTIONS];
-        double argValue;
-
-        while(scanner.available()>0) {
-            // read the lookup table values
-            for (int i = 0; i < NUM_STATES+NUM_ACTIONS; i++) {
-                X[i] = (double)scanner.readInt();
-            }
-            argValue = scanner.readDouble();
-            myLUT.train(X,argValue);
-        }
-        scanner.close();
-    }
+//    private void saveLUT() throws IOException {
+//        DataOutputStream writerString = new DataOutputStream(new RobocodeFileOutputStream(getDataFile("LUT.txt").getAbsolutePath(), true));
+//        DataOutputStream writer = new DataOutputStream(new RobocodeFileOutputStream(getDataFile("LUT.dat").getAbsolutePath(), true));
+//        for (Map.Entry<String, Double> entry : myLUT.getLookupTable().entrySet()) {
+//                writerString.writeUTF(entry.getKey() + ", ");
+//                writerString.writeUTF(entry.getValue().toString() + "\n");
+//
+//                writer.writeUTF(entry.getKey());
+//                writer.writeDouble(entry.getValue());
+//        }
+//        writerString.close();
+//        writer.close();
+//    }
+//
+//    private void loadLUT() throws IOException {
+//        // Input stream to read in the lookup table values
+//        DataInputStream scanner = new DataInputStream(new FileInputStream(getDataFile("LUT.dat")));
+//        double[] X = new double[NUM_STATES+NUM_ACTIONS];
+//        double argValue;
+//
+//        while(scanner.available()>0) {
+//            // read the lookup table values
+//            for (int i = 0; i < NUM_STATES+NUM_ACTIONS; i++) {
+//                X[i] = (double)scanner.readInt();
+//            }
+//            argValue = scanner.readDouble();
+//            myLUT.train(X,argValue);
+//        }
+//        scanner.close();
+//    }
 
 }
